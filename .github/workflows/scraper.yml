@@ -1,4 +1,4 @@
-name: Monitor Metrô SP (Lighweight)
+name: Monitor Metrô SP
 
 on:
   schedule:
@@ -23,7 +23,7 @@ jobs:
 
       - name: Instalar dependências
         run: |
-          pip install requests beautifulsoup4 pandas
+          pip install selenium pandas webdriver-manager requests
 
       - name: Executar Scraper
         env:
@@ -31,19 +31,19 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
 
-      - name: Commitar mudanças
+      - name: Commitar mudanças (se houver atualização)
         run: |
           git config --global user.name 'MetroBot'
           git config --global user.email 'bot@metro.sp'
           
-          # Adiciona arquivos apenas se existirem
-          [ -f estado_metro.json ] && git add estado_metro.json
-          [ -f historico_ocorrencias.csv ] && git add historico_ocorrencias.csv
+          # Tenta adicionar os arquivos (o script garante que o JSON existe, mesmo vazio)
+          git add estado_metro.json || echo "JSON não encontrado"
+          git add historico_ocorrencias.csv || echo "CSV não encontrado"
           
-          # Commit seguro
+          # Verifica se tem algo 'staged' (verde) para commitar
           if ! git diff --cached --quiet; then
-            git commit -m "Atualizando status (via endpoint direto)"
+            git commit -m "Atualizando status do metrô"
             git push
           else
-            echo "Nada para commitar."
+            echo "Nenhuma mudança para salvar no repositório."
           fi
