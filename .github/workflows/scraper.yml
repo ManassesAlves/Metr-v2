@@ -1,4 +1,4 @@
-name: Monitor Metrô SP
+name: Monitor Metrô SP (Lighweight)
 
 on:
   schedule:
@@ -22,7 +22,8 @@ jobs:
           python-version: '3.9'
 
       - name: Instalar dependências
-        run: pip install selenium pandas requests webdriver-manager
+        run: |
+          pip install requests beautifulsoup4 pandas
 
       - name: Executar Scraper
         env:
@@ -35,20 +36,14 @@ jobs:
           git config --global user.name 'MetroBot'
           git config --global user.email 'bot@metro.sp'
           
-          # Adiciona o JSON (se existir)
-          if [ -f estado_metro.json ]; then
-            git add estado_metro.json
-          fi
-
-          # Adiciona o CSV (se existir)
-          if [ -f historico_ocorrencias.csv ]; then
-            git add historico_ocorrencias.csv
-          fi
+          # Adiciona arquivos apenas se existirem
+          [ -f estado_metro.json ] && git add estado_metro.json
+          [ -f historico_ocorrencias.csv ] && git add historico_ocorrencias.csv
           
-          # Verifica se há algo 'staged' para commitar
+          # Commit seguro
           if ! git diff --cached --quiet; then
-            git commit -m "Atualizando dados e histórico"
+            git commit -m "Atualizando status (via endpoint direto)"
             git push
           else
-            echo "Nenhuma alteração para salvar."
+            echo "Nada para commitar."
           fi
