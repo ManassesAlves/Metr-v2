@@ -1,124 +1,115 @@
 import os
 import json
-import time
 import requests
 import pandas as pd
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
+from bs4 import BeautifulSoup
 
 # --- CONFIGURAÇÕES ---
+# URL Direta descoberta (muito mais estável)
+URL_ENDPOINT = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
 ARQUIVO_ESTADO = "estado_metro.json"
 ARQUIVO_HISTORICO = "historico_ocorrencias.csv"
-URL_METRO = "https://www.metro.sp.gov.br/pt_BR/sua-viagem/direto-metro/"
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def enviar_telegram(mensagem):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Aviso: Telegram não configurado.")
+        print("Telegram não configurado.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": mensagem, "parse_mode": "Markdown"}
     try:
-        requests.post(url, data=data)
+        requests.post(url, data=data, timeout=10)
     except Exception as e:
         print(f"Erro Telegram: {e}")
 
-def configurar_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    # User-Agent atualizado para evitar bloqueios
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    chrome_options.add_argument("--window-size=1920,1080")
+def extrair_dados():
+    print(f"Consultando endpoint direto: {URL_ENDPOINT}...")
     
-    driver = webdriver.Chrome(options=chrome_options)
-    return driver
-
-def extrair_dados_robusto(driver):
-    print(f"Acessando {URL_METRO}...")
-    driver.get(URL_METRO)
-    
-    # Espera fixa de 10s para garantir que scripts do site carreguem
-    time.sleep(10)
-    
-    dados_atuais = {}
+    # Headers para simular que somos o site oficial pedindo os dados
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.metro.sp.gov.br/sua-viagem/direto-metro/',
+        'X-Requested-With': 'XMLHttpRequest' # Importante para endpoints PHP/AJAX
+    }
     
     try:
-        # Debug: Mostra o título da página para sabermos se carregou
-        print(f"Título da página acessada: {driver.title}")
-
-        # ESTRATÉGIA NOVA: Pegar todo o texto do corpo e processar linha a linha
-        # Isso evita erros se o site mudar de <li> para <div> ou <span>
-        body_text = driver.find_element(By.TAG_NAME, "body").text
-        linhas_texto = body_text.split('\n')
+        response = requests.get(URL_ENDPOINT, headers=headers, timeout=15)
+        response.raise_for_status() # Garante que não deu erro 404/500
         
-        # Palavras-chave de status
-        status_conhecidos = ["Operação Normal", "Velocidade Reduzida", "Paralisada", "Encerrada", "Operação Parcial"]
-
-        for i, linha in enumerate(linhas_texto):
-            linha = linha.strip()
+        # O endpoint provavelmente retorna HTML puro (<ul>...</ul>) ou JSON.
+        # Vamos assumir HTML pois é um arquivo .php de tema WP.
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        dados_atuais = {}
+        
+        # Estratégia Genérica: Pega todos os itens de lista (li)
+        # Geralmente a estrutura é <li> <span>Linha X</span> <span>Status</span> </li>
+        itens = soup.find_all('li')
+        
+        for item in itens:
+            texto = item.get_text(" ", strip=True) # Pega o texto limpo
             
-            # Procura por linhas que tenham nome de linha (ex: "Linha 1-Azul")
-            if "Linha" in linha and ("Azul" in linha or "Verde" in linha or "Vermelha" in linha or "Amarela" in linha or "Lilás" in linha or "Prata" in linha):
-                
-                # O status costuma estar na mesma linha ou na próxima
-                status_encontrado = None
-                
-                # Verifica se o status está na mesma linha (Ex: "Linha 1-Azul Operação Normal")
-                for s in status_conhecidos:
-                    if s in linha:
-                        status_encontrado = s
-                        break
-                
-                # Se não achou na mesma linha, olha a próxima linha do texto
-                if not status_encontrado and i + 1 < len(linhas_texto):
-                    prox_linha = linhas_texto[i+1].strip()
-                    for s in status_conhecidos:
-                        if s in prox_linha:
-                            status_encontrado = s
+            # Filtra apenas se parecer uma linha de metrô
+            if "Linha" in texto:
+                # Exemplo de texto: "Linha 1-Azul Operação Normal"
+                # Vamos tentar separar o nome da linha do status
+                partes = texto.split('Linha')
+                if len(partes) > 1:
+                    # Reconstrói "Linha 1-Azul..."
+                    conteudo = "Linha" + partes[1]
+                    
+                    # Identifica o status conhecido
+                    status_possiveis = ["Normal", "Reduzida", "Paralisada", "Encerrada", "Parcial"]
+                    status_detectado = "Status Desconhecido"
+                    
+                    for s in status_possiveis:
+                        if s in conteudo:
+                            status_detectado = s
+                            # Remove o status do nome para ficar limpo (opcional)
+                            # nome_linha = conteudo.replace(s, "").strip() 
                             break
-                
-                # Se achou algo, salva
-                if status_encontrado:
-                    # Remove o status do nome da linha para limpar (caso esteja junto)
-                    nome_limpo = linha.replace(status_encontrado, "").strip()
-                    dados_atuais[nome_limpo] = status_encontrado
+                    
+                    # Vamos usar o texto completo da linha como chave para garantir unicidade
+                    # Ex: "Linha 1-Azul" -> "Operação Normal"
+                    # Como a string vem suja, vamos simplificar:
+                    
+                    # Lógica de extração segura:
+                    nome_linha = conteudo.split("Operação")[0].strip() if "Operação" in conteudo else conteudo[:15]
+                    status_final = "Operação " + status_detectado if "Operação" not in status_detectado else status_detectado
+                    
+                    # Refinamento final do nome
+                    if "-" in nome_linha:
+                        dados_atuais[nome_linha] = status_final
 
-        print(f"Linhas encontradas: {len(dados_atuais)}")
-        print(dados_atuais)
+        # Fallback: Se não achou <li>, tenta pegar divs (caso o layout mude)
+        if not dados_atuais:
+            divs = soup.find_all('div')
+            for div in divs:
+                texto = div.get_text(strip=True)
+                if "Linha" in texto and any(s in texto for s in ["Normal", "Reduzida"]):
+                     dados_atuais[texto[:20]] = texto # Salva cru se não conseguir parsear bonito
+
+        return dados_atuais
 
     except Exception as e:
-        print(f"Erro crítico na extração: {e}")
-        # Se der erro, salva o HTML para debug (opcional, ajuda a entender o erro)
-        with open("erro_pagina.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-
-    return dados_atuais
+        print(f"Erro na requisição: {e}")
+        return {}
 
 def main():
-    driver = configurar_driver()
-    try:
-        dados_novos = extrair_dados_robusto(driver)
-    finally:
-        driver.quit()
+    dados_novos = extrair_dados()
 
-    # --- CORREÇÃO PRINCIPAL ---
-    # Se não encontrar dados, forçamos um erro visível ou salvamos vazio para debug
     if not dados_novos:
-        print("❌ ALERTA: O robô acessou o site mas não conseguiu ler as linhas.")
-        print("Possíveis causas: O site mudou o texto, está bloqueando o acesso ou demorou para carregar.")
-        # Não damos 'return' aqui se quisermos forçar a criação do arquivo, 
-        # mas sem dados o arquivo ficaria vazio. Melhor avisar no log.
+        print("❌ Não foi possível extrair dados do endpoint. Verifique se a URL mudou.")
         return
 
-    # Lógica de Arquivos (JSON e CSV)
+    print(f"Dados extraídos com sucesso: {len(dados_novos)} linhas.")
+    
+    # Carrega estado anterior
     dados_antigos = {}
     arquivo_existe = os.path.exists(ARQUIVO_ESTADO)
-    
     if arquivo_existe:
         with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
             try:
@@ -131,11 +122,12 @@ def main():
     timestamp_agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for linha, status_novo in dados_novos.items():
+        # Tenta achar a linha no estado anterior (fuzzy matching simples ou chave exata)
         status_anterior = dados_antigos.get(linha)
         
         if status_novo != status_anterior:
             icone = "🟢" if "Normal" in status_novo else "🔴" if "Paralisada" in status_novo else "🟡"
-            status_exibicao_antigo = status_anterior if status_anterior else "Sem registro"
+            status_exibicao_antigo = status_anterior if status_anterior else "Monitoramento Iniciado"
             
             mudancas_notificacao.append(f"{icone} *{linha}*\nDe: {status_exibicao_antigo}\nPara: *{status_novo}*")
             
@@ -146,26 +138,25 @@ def main():
                 "status_novo": status_novo
             })
 
-    # Salva CSV se houver histórico novo
+    # Salva CSV
     if registros_historico:
         df_hist = pd.DataFrame(registros_historico)
         csv_existe = os.path.isfile(ARQUIVO_HISTORICO)
         df_hist.to_csv(ARQUIVO_HISTORICO, mode='a', index=False, header=not csv_existe, encoding='utf-8-sig', sep=';')
+        print("Histórico CSV atualizado.")
 
-    # Salva JSON e Notifica
-    # Salva sempre que tiver dados válidos, para garantir que o arquivo exista
+    # Notifica e Atualiza JSON
     if mudancas_notificacao or not arquivo_existe:
         if mudancas_notificacao:
             msg = f"🚨 *ATUALIZAÇÃO METRÔ SP* 🚨\n\n" + "\n\n".join(mudancas_notificacao)
-            msg += f"\n\n_Verificado em: {datetime.now().strftime('%H:%M')}_"
+            msg += f"\n\n_Fonte: Direto do Metrô_"
             enviar_telegram(msg)
         
-        # O PULO DO GATO: O arquivo é criado aqui.
         with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
             json.dump(dados_novos, f, ensure_ascii=False, indent=4)
-        print(f"Sucesso: Arquivo {ARQUIVO_ESTADO} atualizado/criado.")
+        print("Estado JSON atualizado.")
     else:
-        print("Sem mudanças, mantendo arquivo atual.")
+        print("Sem mudanças de status.")
 
 if __name__ == "__main__":
     main()
