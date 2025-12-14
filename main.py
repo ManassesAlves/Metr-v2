@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import pandas as pd
+import re
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -30,10 +31,10 @@ def enviar_telegram(mensagem):
 
 def configurar_driver():
     chrome_options = Options()
-    chrome_options.add_argument("--headless") # Roda sem interface gráfica
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # Simula um usuário real para não ser bloqueado
+    # User-Agent comum para evitar bloqueios
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     chrome_options.add_argument("--window-size=1920,1080")
     
@@ -41,54 +42,40 @@ def configurar_driver():
     return driver
 
 def extrair_dados_selenium(driver):
-    print(f"Acessando via Selenium: {URL_METRO}")
+    print(f"Acessando: {URL_METRO}")
     driver.get(URL_METRO)
     
-    # 1. Espera Inteligente: Aguarda até aparecer a palavra "Linha" na tela
-    try:
-        wait = WebDriverWait(driver, 25)
-        wait.until(EC.text_to_be_present_in_element((By.TAG_NAME, "body"), "Linha"))
-    except:
-        print("⚠️ Tempo de espera excedido. O site pode estar lento, mas vamos tentar ler mesmo assim.")
-
-    # 2. Espera de Segurança (Garante que o JS terminou de montar a lista)
-    time.sleep(5)
+    # Aumentei o tempo de espera para garantir (Servers do GitHub as vezes são lentos)
+    time.sleep(10)
 
     dados = {}
     try:
-        # Pega TODO o texto visível da página
-        body_text = driver.find_element(By.TAG_NAME, "body").text
-        linhas_texto = body_text.split('\n')
+        # Pega TODO o texto da página
+        body = driver.find_element(By.TAG_NAME, "body")
+        texto_completo = body.text
         
-        # Termos para procurar
-        nomes_linhas = ["Azul", "Verde", "Vermelha", "Amarela", "Lilás", "Prata"]
-        status_possiveis = ["Operação Normal", "Velocidade Reduzida", "Paralisada", "Encerrada", "Operação Parcial"]
-
-        for i, linha in enumerate(linhas_texto):
-            linha_limpa = linha.strip()
+        # --- ESTRATÉGIA REGEX (Mais robusta) ---
+        # Procura por: "Linha" + (espaço/numero/hifen/texto) + (Status conhecido)
+        # Ex: "Linha 1-Azul Operação Normal"
+        padrao = r"(Linha\s+\d+[\w\s-]+?)(Operação Normal|Velocidade Reduzida|Paralisada|Encerrada|Operação Parcial)"
+        
+        matches = re.findall(padrao, texto_completo, re.IGNORECASE | re.MULTILINE)
+        
+        if matches:
+            for nome_sujo, status in matches:
+                # Limpeza do nome (tira espaços extras e quebras de linha)
+                nome_limpo = nome_sujo.strip().replace("\n", " ")
+                dados[nome_limpo] = status.strip()
+        
+        # --- DIAGNÓSTICO DE ERRO (O "Dedo-Duro") ---
+        if not dados:
+            print("⚠️ AVISO: Nenhuma linha encontrada via Regex.")
+            print("--- O QUE O ROBÔ VIU (Primeiros 500 caracteres) ---")
+            print(texto_completo[:500])
+            print("--- FIM DO TEXTO ---")
             
-            # Se a linha contém "Linha" e uma das cores conhecidas
-            if "Linha" in linha_limpa and any(cor in linha_limpa for cor in nomes_linhas):
-                
-                # Tenta achar o status na mesma linha
-                status_encontrado = next((s for s in status_possiveis if s in linha_limpa), None)
-                
-                # Se não achou, olha a linha de baixo (estrutura comum em mobile)
-                if not status_encontrado and i + 1 < len(linhas_texto):
-                    prox_linha = linhas_texto[i+1].strip()
-                    status_encontrado = next((s for s in status_possiveis if s in prox_linha), None)
-
-                if status_encontrado:
-                    # Salva no dicionário. Ex: "Linha 1-Azul" -> "Operação Normal"
-                    # Remove o status do nome da linha para limpar
-                    nome_linha = linha_limpa.split("Operação")[0].split("Velocidade")[0].strip()
-                    
-                    # Filtro extra para evitar lixo
-                    if len(nome_linha) < 60: 
-                        dados[nome_linha] = status_encontrado
-
     except Exception as e:
-        print(f"Erro ao ler página: {e}")
+        print(f"Erro técnico na extração: {e}")
 
     return dados
 
@@ -99,32 +86,31 @@ def main():
     finally:
         driver.quit()
 
-    if not dados_novos:
-        print("❌ ERRO CRÍTICO: O Selenium abriu o site, mas não achou nenhuma linha.")
-        # NÃO vamos dar exit(1) aqui. Vamos deixar criar um JSON vazio se for preciso,
-        # para não quebrar o workflow do Git, mas avisamos no log.
-    else:
-        print(f"✅ Sucesso! {len(dados_novos)} linhas encontradas.")
-
-    # --- LÓGICA DE ARQUIVOS ---
+    # --- LÓGICA DE PERSISTÊNCIA ---
     dados_antigos = {}
+    
+    # Lê arquivo anterior se existir e não estiver vazio
     if os.path.exists(ARQUIVO_ESTADO):
-        with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
-            try:
-                dados_antigos = json.load(f)
-            except:
-                pass
+        try:
+            with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
+                conteudo = f.read()
+                if conteudo:
+                    dados_antigos = json.loads(conteudo)
+        except:
+            print("Erro ao ler JSON antigo (pode estar corrompido).")
 
     mudancas = []
     historico = []
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Se dados_novos estiver vazio (erro no site), usamos os dados antigos para não gerar falso alerta
-    # ou simplesmente pulamos a verificação.
+    # Se a extração falhou (dados_novos vazio), NÃO atualizamos nada para não estragar o histórico
     if dados_novos:
+        print(f"✅ Sucesso: {len(dados_novos)} linhas identificadas.")
+        
         for linha, status in dados_novos.items():
             status_antigo = dados_antigos.get(linha)
             
+            # Detecta mudança
             if status != status_antigo:
                 icone = "🟢" if "Normal" in status else "🔴" if "Paralisada" in status else "🟡"
                 status_txt_antigo = status_antigo if status_antigo else "Sem registro"
@@ -138,28 +124,28 @@ def main():
                     "status_novo": status
                 })
 
-    # 1. Salva CSV
-    if historico:
-        df = pd.DataFrame(historico)
-        header = not os.path.exists(ARQUIVO_HISTORICO)
-        df.to_csv(ARQUIVO_HISTORICO, mode='a', index=False, header=header, sep=';', encoding='utf-8-sig')
-        print("Histórico CSV atualizado.")
+        # 1. Salva CSV se houver histórico
+        if historico:
+            df = pd.DataFrame(historico)
+            header = not os.path.exists(ARQUIVO_HISTORICO)
+            df.to_csv(ARQUIVO_HISTORICO, mode='a', index=False, header=header, sep=';', encoding='utf-8-sig')
+            print("CSV Histórico atualizado.")
 
-    # 2. Salva JSON e Notifica
-    # Importante: Salvamos o JSON mesmo se não houver mudança, para garantir que o arquivo exista
-    # Se dados_novos for vazio (erro), NÃO sobrescrevemos para não perder o estado anterior.
-    if dados_novos:
+        # 2. Salva JSON (Sempre que houver dados válidos)
+        # Se tiver mudança notificamos, se não, apenas salvamos o estado atual
         if mudancas:
             msg = f"🚨 *METRÔ SP* 🚨\n\n" + "\n\n".join(mudancas)
             msg += f"\n\n_Horário: {datetime.now().strftime('%H:%M')}_"
             enviar_telegram(msg)
+            print("Notificação enviada.")
         
         with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
             json.dump(dados_novos, f, ensure_ascii=False, indent=4)
-        print("Arquivo JSON salvo/atualizado.")
+        print("Estado JSON salvo com sucesso.")
+        
     else:
-        print("Sem dados novos válidos. Mantendo estado anterior.")
-        # Se o arquivo não existir (primeira execução com erro), cria um vazio para o Git não reclamar
+        print("❌ Falha: Não há dados novos para salvar. O arquivo JSON não será tocado.")
+        # Se for a primeira vez e falhou, cria um JSON vazio só para o Git não dar erro fatal
         if not os.path.exists(ARQUIVO_ESTADO):
              with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
                 json.dump({}, f)
