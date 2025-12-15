@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 # =====================================================
 
 URL_METRO = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
+URL_VIAMOBILIDADE = "https://trilhos.motiva.com.br/viamobilidade8e9/situacao-das-linhas/"
 
 # =====================================================
 # CONFIG
@@ -19,8 +20,8 @@ URL_METRO = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-ARQUIVO_ESTADO = "estado_metro.json"
-ARQUIVO_HISTORICO = "historico_metro.csv"
+ARQUIVO_ESTADO = "estado_metro_viamobilidade.json"
+ARQUIVO_HISTORICO = "historico_metro_viamobilidade.csv"
 
 # =====================================================
 # UTIL
@@ -136,17 +137,55 @@ def capturar_metro():
     return dados
 
 # =====================================================
+# SCRAPING VIAMOBILIDADE
+# =====================================================
+
+def capturar_viamobilidade():
+    dados = {}
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(URL_VIAMOBILIDADE, timeout=60000)
+
+        # aguarda carregamento do conteúdo dinâmico
+        page.wait_for_selector("div[data-w-tab]", timeout=20000)
+
+        soup = BeautifulSoup(page.content(), "lxml")
+        browser.close()
+
+    # Cada aba representa uma linha
+    for aba in soup.select("div[data-w-tab]"):
+        titulo = aba.select_one("h3, h4")
+        status = aba.select_one("strong, p")
+
+        if not titulo or not status:
+            continue
+
+        nome_linha = titulo.get_text(strip=True)
+        status_linha = status.get_text(strip=True)
+
+        # Normalização padronizada
+        dados[f"ViaMobilidade – {nome_linha}"] = status_linha
+
+    print(f"🚆 ViaMobilidade capturada: {len(dados)} linhas")
+    return dados
+
+# =====================================================
 # MAIN
 # =====================================================
 
 def main():
-    print("🚇 Monitoramento do Metrô iniciado")
+    print("🚇 Monitoramento do Metrô e ViaMobilidade iniciado")
 
     garantir_csv_existe()
     estado_anterior = carregar_estado()
     estado_atual = {}
 
-    dados = capturar_metro()
+    # Unificando dados de ambos os sistemas
+    dados = {}
+    dados.update(capturar_metro())
+    dados.update(capturar_viamobilidade())
 
     if not dados:
         print("❌ Nenhum dado capturado")
