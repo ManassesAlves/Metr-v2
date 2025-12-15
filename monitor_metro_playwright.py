@@ -22,15 +22,9 @@ def agora_sp():
 def enviar_telegram(msg):
     if not TOKEN or not CHAT_ID:
         return
-
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     requests.post(
-        url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": msg,
-            "parse_mode": "Markdown",
-        },
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"},
         timeout=10,
     )
 
@@ -38,25 +32,24 @@ def enviar_telegram(msg):
 def carregar_estado():
     if not os.path.exists(ARQUIVO_ESTADO):
         return {}
-
     with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def salvar_estado(estado):
+    # garante criação do arquivo
     with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
         json.dump(estado, f, ensure_ascii=False, indent=2)
 
 
 def salvar_historico(linha, novo, antigo):
     existe = os.path.exists(ARQUIVO_HISTORICO)
-    t = agora_sp()
-
     with open(ARQUIVO_HISTORICO, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not existe:
             writer.writerow(["Data", "Hora", "Linha", "Status Novo", "Status Antigo"])
 
+        t = agora_sp()
         writer.writerow([
             t.strftime("%Y-%m-%d"),
             t.strftime("%H:%M:%S"),
@@ -87,7 +80,6 @@ def capturar_status():
     for item in soup.select("li.linha"):
         nome = item.select_one(".linha-nome")
         status = item.select_one(".linha-situacao")
-
         if nome and status:
             dados[nome.get_text(strip=True)] = status.get_text(strip=True)
 
@@ -95,35 +87,29 @@ def capturar_status():
 
 
 def main():
-    print("🚇 Monitoramento do Metrô iniciado")
+    print("🚇 Monitoramento iniciado")
 
     estado_anterior = carregar_estado()
     estado_atual = {}
 
     dados = capturar_status()
 
-    if not dados:
-        print("Nenhum dado capturado.")
-        return
-
+    # GARANTE criação mesmo se não houver mudança
     for linha, status in dados.items():
         antigo = estado_anterior.get(linha)
 
-        # 🚨 Só envia se houve mudança REAL
         if antigo is not None and antigo != status:
             emoji = "✅" if "Normal" in status else "⚠️"
-            mensagem = (
-                f"{emoji} **Linha {linha}**\n"
-                f"🔄 De: {antigo}\n"
-                f"➡️ Para: **{status}**"
+            enviar_telegram(
+                f"{emoji} Linha {linha}\nDe: {antigo}\nPara: {status}"
             )
-            enviar_telegram(mensagem)
             salvar_historico(linha, status, antigo)
 
         estado_atual[linha] = status
 
     salvar_estado(estado_atual)
-    print("✅ Execução finalizada com sucesso")
+
+    print("✅ Arquivos JSON e CSV garantidos")
 
 
 if __name__ == "__main__":
