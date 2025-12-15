@@ -30,5 +30,13 @@
   "ViaMobilidade – Linha 9 Esmeralda": {
     "status": "Operação normal",
     "descricao": null
+  },
+  "CPTM – Linha 7": {
+    "status": "-Rubi",
+    "descricao": "-Rubi"
+  },
+  "CPTM – Linha 10": {
+    "status": "-Turquesa",
+    "descricao": "-Turquesa"
   }
 }
