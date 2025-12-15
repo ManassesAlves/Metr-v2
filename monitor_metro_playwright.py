@@ -40,7 +40,11 @@ def enviar_telegram(msg):
         return
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"},
+        data={
+            "chat_id": CHAT_ID,
+            "text": msg,
+            "parse_mode": "Markdown",
+        },
         timeout=10,
     )
 
@@ -123,12 +127,25 @@ def salvar_historico(linha, novo, antigo, descricao):
         ])
 
 # =====================================================
-# SCRAPING
+# SCRAPING METRÔ (RESILIENTE)
 # =====================================================
 
 def capturar_metro():
     dados = {}
-    r = requests.get(URL_METRO, timeout=30)
+
+    try:
+        r = requests.get(
+            URL_METRO,
+            timeout=15,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; MonitorTransporte/1.0)"
+            }
+        )
+        r.raise_for_status()
+    except Exception as e:
+        print(f"⚠️ Falha ao acessar site do Metrô: {e}")
+        return dados  # fallback seguro
+
     soup = BeautifulSoup(r.text, "lxml")
 
     for item in soup.select("li.linha"):
@@ -145,8 +162,12 @@ def capturar_metro():
                 "descricao": extrair_descricao(status_txt),
             }
 
+    print(f"🚇 Metrô capturado: {len(dados)} linhas")
     return dados
 
+# =====================================================
+# SCRAPING VIAMOBILIDADE
+# =====================================================
 
 def capturar_viamobilidade():
     dados = {
@@ -160,12 +181,18 @@ def capturar_viamobilidade():
         },
     }
 
-    r = requests.get(URL_VIAMOBILIDADE, timeout=30)
-    texto = r.text.lower()
+    try:
+        r = requests.get(URL_VIAMOBILIDADE, timeout=30)
+        texto = r.text.lower()
 
-    if "operação normal" in texto:
-        for linha in dados:
-            dados[linha] = {"status": "Operação normal", "descricao": None}
+        if "operação normal" in texto:
+            for linha in dados:
+                dados[linha] = {
+                    "status": "Operação normal",
+                    "descricao": None,
+                }
+    except Exception as e:
+        print(f"⚠️ Falha ao acessar ViaMobilidade: {e}")
 
     return dados
 
