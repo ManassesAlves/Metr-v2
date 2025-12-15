@@ -190,18 +190,41 @@ def capturar_viamobilidade():
 
         if "operação normal" in texto:
             for linha in dados:
-                dados[linha] = {"status": "Operação normal", "descricao": None}
+                dados[linha] = {
+                    "status": "Operação normal",
+                    "descricao": None,
+                }
     except Exception as e:
         print(f"⚠️ Falha ao acessar ViaMobilidade: {e}")
 
     return dados
 
 # =====================================================
-# SCRAPING CPTM
+# SCRAPING CPTM (GLOBAL E SEGURO)
 # =====================================================
 
 def capturar_cptm():
-    dados = {}
+    """
+    CPTM não expõe status estruturado por linha de forma confiável.
+    Estratégia:
+    - Assume Operação normal
+    - Só altera se houver palavras-chave claras de problema
+    """
+
+    linhas_cptm = {
+        "CPTM – Linha 7 – Rubi",
+        "CPTM – Linha 8 – Diamante",
+        "CPTM – Linha 9 – Esmeralda",
+        "CPTM – Linha 10 – Turquesa",
+        "CPTM – Linha 11 – Coral",
+        "CPTM – Linha 12 – Safira",
+        "CPTM – Linha 13 – Jade",
+    }
+
+    dados = {
+        linha: {"status": "Operação normal", "descricao": None}
+        for linha in linhas_cptm
+    }
 
     try:
         r = requests.get(
@@ -214,19 +237,26 @@ def capturar_cptm():
         print(f"⚠️ Falha ao acessar CPTM: {e}")
         return dados
 
-    soup = BeautifulSoup(r.text, "lxml")
-    texto = soup.get_text("\n", strip=True)
+    texto = r.text.lower()
 
-    for linha_num in ["7", "8", "9", "10", "11", "12", "13"]:
-        if f"Linha {linha_num}" in texto:
-            trecho = texto.split(f"Linha {linha_num}", 1)[1][:200]
-            status_txt = "Operação normal" if "normal" in trecho.lower() else trecho.split("\n")[0]
+    palavras_problema = [
+        "velocidade reduzida",
+        "operação parcial",
+        "operação interrompida",
+        "operação prejudicada",
+        "operação encerrada",
+        "falha",
+        "problema",
+    ]
 
-            linha_nome = f"CPTM – Linha {linha_num}"
-            dados[linha_nome] = {
-                "status": status_txt,
-                "descricao": extrair_descricao(status_txt),
-            }
+    for palavra in palavras_problema:
+        if palavra in texto:
+            for linha in dados:
+                dados[linha] = {
+                    "status": palavra.title(),
+                    "descricao": palavra.title(),
+                }
+            break
 
     return dados
 
