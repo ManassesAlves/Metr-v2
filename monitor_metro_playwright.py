@@ -6,14 +6,22 @@ import csv
 import requests
 from datetime import datetime, timedelta, timezone
 
-URL = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
+# ===============================
+# URLS
+# ===============================
+
+URL_METRO = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
+URL_CPTM = "https://www.cptm.sp.gov.br/Pages/Situacao-Linhas.aspx"
+
+# ===============================
+# CONFIG
+# ===============================
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 ARQUIVO_ESTADO = "estado_metro.json"
 ARQUIVO_HISTORICO = "historico_metro.csv"
-
 
 # ===============================
 # UTIL
@@ -26,17 +34,11 @@ def agora_sp():
 def enviar_telegram(msg):
     if not TOKEN or not CHAT_ID:
         return
-
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": msg,
-            "parse_mode": "Markdown",
-        },
+        data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"},
         timeout=10,
     )
-
 
 # ===============================
 # PERSISTÊNCIA
@@ -45,7 +47,6 @@ def enviar_telegram(msg):
 def carregar_estado():
     if not os.path.exists(ARQUIVO_ESTADO):
         return {}
-
     with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -59,19 +60,12 @@ def garantir_csv_existe():
     if not os.path.exists(ARQUIVO_HISTORICO):
         with open(ARQUIVO_HISTORICO, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow([
-                "Data",
-                "Hora",
-                "Linha",
-                "Status Novo",
-                "Status Antigo",
-            ])
+            writer.writerow(["Data", "Hora", "Linha", "Status Novo", "Status Antigo"])
 
 
 def salvar_historico(linha, novo, antigo):
     garantir_csv_existe()
     t = agora_sp()
-
     with open(ARQUIVO_HISTORICO, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -82,115 +76,64 @@ def salvar_historico(linha, novo, antigo):
             antigo,
         ])
 
-
 # ===============================
-# NORMALIZAÇÃO / IDENTIFICAÇÃO
+# NORMALIZAÇÃO / EMOJIS
 # ===============================
 
 def normalizar_nome(numero, nome):
-    return f"Linha {numero.strip()} – {nome.strip().title()}"
+    return f"Linha {numero} – {nome.strip().title()}"
 
 
-def tipo_linha(nome_normalizado):
-    """
-    CPTM: linhas >= 7
-    Metrô: linhas <= 6
-    """
+def tipo_linha(nome):
     try:
-        numero = int(nome_normalizado.split()[1])
-        return "CPTM" if numero >= 7 else "METRO"
-    except Exception:
+        n = int(nome.split()[1])
+        return "CPTM" if n >= 7 else "METRO"
+    except:
         return "METRO"
 
 
 def emoji_linha(linha, status):
-    tipo = tipo_linha(linha)
     ok = "Normal" in status
-
-    if tipo == "CPTM":
+    if tipo_linha(linha) == "CPTM":
         return "🚆✅" if ok else "🚆⚠️"
-    else:
-        return "🚇✅" if ok else "🚇⚠️"
-
+    return "🚇✅" if ok else "🚇⚠️"
 
 # ===============================
-# SCRAPING
+# SCRAPER METRÔ
 # ===============================
 
-def capturar_status():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(URL, timeout=60000)
+def capturar_metro(page):
+    page.goto(URL_METRO, timeout=60000)
 
-        try:
-            page.click("button:has-text('Aceitar')", timeout=5000)
-        except:
-            pass
+    try:
+        page.click("button:has-text('Aceitar')", timeout=5000)
+    except:
+        pass
 
-        page.wait_for_timeout(3000)
-        html = page.content()
-        browser.close()
+    page.wait_for_timeout(3000)
+    soup = BeautifulSoup(page.content(), "lxml")
 
-    soup = BeautifulSoup(html, "lxml")
     dados = {}
-
     for item in soup.select("li.linha"):
         numero = item.select_one(".linha-numero")
         nome = item.select_one(".linha-nome")
         status = item.select_one(".linha-situacao")
 
-        if not numero or not nome or not status:
-            continue
-
-        linha = normalizar_nome(
-            numero.get_text(strip=True),
-            nome.get_text(strip=True),
-        )
-
-        dados[linha] = status.get_text(strip=True)
+        if numero and nome and status:
+            linha = normalizar_nome(
+                numero.get_text(strip=True),
+                nome.get_text(strip=True),
+            )
+            dados[linha] = status.get_text(strip=True)
 
     return dados
 
-
 # ===============================
-# MAIN
+# SCRAPER CPTM
 # ===============================
 
-def main():
-    print("🚇🚆 Monitoramento Metrô + CPTM iniciado")
+def capturar_cptm(page):
+    page.goto(URL_CPTM, timeout=60000)
+    page.wait_for_timeout(4000)
 
-    garantir_csv_existe()
-
-    estado_anterior = carregar_estado()
-    estado_atual = {}
-
-    dados = capturar_status()
-
-    if not dados:
-        print("⚠️ Nenhum dado capturado.")
-        return
-
-    for linha, status in dados.items():
-        antigo = estado_anterior.get(linha)
-
-        # 🔔 alerta somente se houver mudança
-        if antigo is not None and antigo != status:
-            emoji = emoji_linha(linha, status)
-            mensagem = (
-                f"{emoji} **{linha}**\n"
-                f"🔄 De: {antigo}\n"
-                f"➡️ Para: **{status}**"
-            )
-            enviar_telegram(mensagem)
-            salvar_historico(linha, status, antigo)
-
-        estado_atual[linha] = status
-
-    salvar_estado(estado_atual)
-
-    print("✅ Execução finalizada com sucesso")
-
-
-if __name__ == "__main__":
-    main()
+    soup = BeautifulSoup(page.content(), "lxml")
