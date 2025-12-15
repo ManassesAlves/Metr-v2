@@ -13,19 +13,20 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repositório
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Instalar dependências
         run: |
           pip install playwright requests beautifulsoup4 lxml
           playwright install chromium
 
-      - name: Run scraper
+      - name: Executar monitoramento
         run: python monitor_metro_playwright.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -35,6 +36,8 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+
           git add estado_metro.json historico_metro.csv || true
-          git commit -m "Atualização automática do status do metrô" || echo "Sem alterações"
+
+          git diff --cached --quiet || git commit -m "Atualização automática do status do metrô"
           git push
