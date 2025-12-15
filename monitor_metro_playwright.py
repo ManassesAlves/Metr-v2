@@ -6,14 +6,14 @@ import csv
 from datetime import datetime, timedelta, timezone
 
 # =====================================================
-# URLs
+# URLS
 # =====================================================
 
 URL_METRO = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
-URL_VIAMOBILIDADE_STATUS = "https://trilhos.motiva.com.br/viamobilidade8e9/situacao-das-linhas/"
+URL_VIAMOBILIDADE = "https://trilhos.motiva.com.br/viamobilidade8e9/situacao-das-linhas/"
 
 # =====================================================
-# Config
+# CONFIG
 # =====================================================
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -23,29 +23,62 @@ ARQUIVO_ESTADO = "estado_transporte.json"
 ARQUIVO_HISTORICO = "historico_transporte.csv"
 
 # =====================================================
-# Utilities
+# UTIL
 # =====================================================
 
 def agora_sp():
     return datetime.now(timezone(timedelta(hours=-3)))
 
+def log(msg):
+    print(f"[LOG] {msg}")
+
 def enviar_telegram(msg):
     if not TOKEN or not CHAT_ID:
+        log("Telegram não configurado (TOKEN ou CHAT_ID ausente)")
         return
+
     try:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"},
-            timeout=10
+            data={
+                "chat_id": CHAT_ID,
+                "text": msg,
+                "parse_mode": "Markdown",
+            },
+            timeout=10,
         )
+        log("Mensagem enviada ao Telegram")
     except Exception as e:
-        print("Erro ao enviar Telegram:", e)
+        log(f"Erro ao enviar Telegram: {e}")
+
+# =====================================================
+# PERSISTÊNCIA
+# =====================================================
+
+def carregar_estado():
+    if not os.path.exists(ARQUIVO_ESTADO):
+        log("Arquivo de estado não existe (primeira execução)")
+        return {}
+    with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def salvar_estado(estado):
+    with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
+        json.dump(estado, f, ensure_ascii=False, indent=2)
+    log("Arquivo JSON salvo com sucesso")
 
 def garantir_csv_existe():
     if not os.path.exists(ARQUIVO_HISTORICO):
         with open(ARQUIVO_HISTORICO, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["Data","Hora","Linha","Status Novo","Status Antigo"])
+            writer.writerow([
+                "Data",
+                "Hora",
+                "Linha",
+                "Status Novo",
+                "Status Antigo",
+            ])
+        log("CSV histórico criado")
 
 def salvar_historico(linha, novo, antigo):
     garantir_csv_existe()
@@ -55,94 +88,108 @@ def salvar_historico(linha, novo, antigo):
         writer.writerow([
             t.strftime("%Y-%m-%d"),
             t.strftime("%H:%M:%S"),
-            linha, novo, antigo
+            linha,
+            novo,
+            antigo,
         ])
 
-def carregar_estado():
-    if not os.path.exists(ARQUIVO_ESTADO):
-        return {}
-    with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def salvar_estado(estado):
-    with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
-        json.dump(estado, f, ensure_ascii=False, indent=2)
-
-def emoji_status(status):
-    if not status:
-        return "❓"
-    s = status.lower()
-    if "normal" in s:
-        return "✅"
-    if "encerrada" in s:
-        return "❌"
-    if "atividade programada" in s or "impacto" in s:
-        return "⚠️"
-    return "ℹ️"
-
 # =====================================================
-# Crawl ViaMobilidade (HTML)
+# SCRAPING METRÔ (HTML ESTÁTICO)
 # =====================================================
 
-def capturar_viamobilidade_html():
-    try:
-        res = requests.get(URL_VIAMOBILIDADE_STATUS, timeout=30)
-        res.raise_for_status()
-    except Exception as e:
-        print("Erro ao acessar ViaMobilidade:", e)
-        return {}
-
-    soup = BeautifulSoup(res.text, "lxml")
-    text = soup.get_text("\n", strip=True)
-
+def capturar_metro():
     dados = {}
-    for linha in ["Linha 8-Diamante", "Linha 9-Esmeralda"]:
-        if linha in text:
-            # encontra a posição do nome e pega o status mais próximo depois
-            idx = text.find(linha)
-            fragment = text[idx:idx+200]
-            # status é a primeira linha significativa após o nome
-            partes = fragment.split("\n")
-            if len(partes) > 1:
-                status = partes[1].strip()
-            else:
-                status = ""
-            dados[f"ViaMobilidade – {linha}"] = status
-        else:
-            dados[f"ViaMobilidade – {linha}"] = "Status não encontrado"
+    log("Capturando dados do Metrô")
 
-    print(f"🚆 ViaMobilidade capturada (HTML): {len(dados)}")
+    try:
+        r = requests.get(URL_METRO, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        log(f"Erro ao acessar site do Metrô: {e}")
+        return dados
+
+    soup = BeautifulSoup(r.text, "lxml")
+
+    for item in soup.select("li.linha"):
+        numero = item.select_one(".linha-numero")
+        nome = item.select_one(".linha-nome")
+        status = item.select_one(".linha-situacao")
+
+        if numero and nome and status:
+            linha = f"Linha {numero.text.strip()} – {nome.text.strip()}"
+            dados[linha] = status.text.strip()
+
+    log(f"Metrô capturado: {len(dados)} linhas")
     return dados
 
 # =====================================================
-# You can keep your capturar_metro() function here unchanged...
+# SCRAPING VIAMOBILIDADE (GARANTIDO)
+# =====================================================
+
+def capturar_viamobilidade():
+    dados = {
+        "ViaMobilidade – Linha 8 Diamante": "Status não identificado",
+        "ViaMobilidade – Linha 9 Esmeralda": "Status não identificado",
+    }
+
+    log("Capturando ViaMobilidade")
+
+    try:
+        r = requests.get(URL_VIAMOBILIDADE, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        log(f"Erro ao acessar ViaMobilidade: {e}")
+        return dados
+
+    texto = r.text.lower()
+
+    if "operação normal" in texto:
+        dados["ViaMobilidade – Linha 8 Diamante"] = "Operação normal"
+        dados["ViaMobilidade – Linha 9 Esmeralda"] = "Operação normal"
+
+    log("ViaMobilidade processada")
+    return dados
+
+# =====================================================
+# MAIN
 # =====================================================
 
 def main():
-    print("🔍 Iniciando monitoramento...")
+    log("Iniciando monitoramento")
 
     estado_anterior = carregar_estado()
     estado_atual = {}
 
     dados = {}
-    # ➤ Metrô (mantém sua função se já tiver)
-    # dados.update(capturar_metro())
+    dados.update(capturar_metro())
+    dados.update(capturar_viamobilidade())
 
-    # ➤ ViaMobilidade (HTML parsing)
-    dados.update(capturar_viamobilidade_html())
+    if not dados:
+        log("Nenhum dado capturado — abortando")
+        return
 
     for linha, status in dados.items():
         antigo = estado_anterior.get(linha)
-        if antigo is not None and antigo != status:
+
+        # 🔔 PRIMEIRA EXECUÇÃO OU MUDANÇA
+        if antigo != status:
             enviar_telegram(
-                f"{emoji_status(status)} **{linha}**\n"
-                f"De: {antigo}\nPara: **{status}**"
+                f"🚇 **{linha}**\n"
+                f"➡️ Status: **{status}**"
+                + (f"\n🔄 Antes: {antigo}" if antigo else "")
             )
-            salvar_historico(linha, status, antigo)
+
+            if antigo:
+                salvar_historico(linha, status, antigo)
+
         estado_atual[linha] = status
 
     salvar_estado(estado_atual)
-    print("✅ Estado atualizado com sucesso")
+    log("Monitoramento finalizado com sucesso")
+
+# =====================================================
+# ENTRYPOINT
+# =====================================================
 
 if __name__ == "__main__":
     main()
