@@ -7,11 +7,10 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 # =====================================================
-# URLS
+# URL
 # =====================================================
 
 URL_METRO = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
-URL_CPTM_API = "https://www.cptm.sp.gov.br/_layouts/15/Cptm.WebServices/SituacaoService.asmx/ObterSituacao"
 
 # =====================================================
 # CONFIG
@@ -46,7 +45,6 @@ def enviar_telegram(msg):
         )
     except Exception as e:
         print("Erro ao enviar Telegram:", e)
-
 
 # =====================================================
 # PERSISTÊNCIA
@@ -91,28 +89,18 @@ def salvar_historico(linha, novo, antigo):
         ])
 
 # =====================================================
-# NORMALIZAÇÃO / EMOJIS
+# NORMALIZAÇÃO / EMOJI
 # =====================================================
 
 def normalizar_nome(numero, nome):
     return f"Linha {numero.strip()} – {nome.strip().title()}"
 
 
-def tipo_linha(nome):
-    try:
-        return "CPTM" if int(nome.split()[1]) >= 7 else "METRO"
-    except Exception:
-        return "METRO"
-
-
-def emoji_linha(linha, status):
-    ok = "Normal" in status
-    if tipo_linha(linha) == "CPTM":
-        return "🚆✅" if ok else "🚆⚠️"
-    return "🚇✅" if ok else "🚇⚠️"
+def emoji_status(status):
+    return "🚇✅" if "Normal" in status else "🚇⚠️"
 
 # =====================================================
-# SCRAPER METRÔ (HTML)
+# SCRAPING METRÔ
 # =====================================================
 
 def capturar_metro():
@@ -148,53 +136,17 @@ def capturar_metro():
     return dados
 
 # =====================================================
-# SCRAPER CPTM (API JSON)
-# =====================================================
-
-def capturar_cptm():
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json; charset=UTF-8",
-        "User-Agent": "Mozilla/5.0",
-    }
-
-    try:
-        resp = requests.post(URL_CPTM_API, headers=headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print("❌ Erro ao acessar API CPTM:", e)
-        return {}
-
-    dados = {}
-
-    for item in data.get("d", []):
-        numero = item.get("Linha")
-        nome = item.get("Cor")
-        status = item.get("Situacao")
-
-        if numero and nome and status:
-            linha = normalizar_nome(numero, nome)
-            dados[linha] = status
-
-    print(f"🚆 CPTM capturada via API: {len(dados)} linhas")
-    return dados
-
-# =====================================================
 # MAIN
 # =====================================================
 
 def main():
-    print("🚇🚆 Monitoramento Metrô + CPTM iniciado")
+    print("🚇 Monitoramento do Metrô iniciado")
 
     garantir_csv_existe()
     estado_anterior = carregar_estado()
     estado_atual = {}
 
-    dados_metro = capturar_metro()
-    dados_cptm = capturar_cptm()
-
-    dados = {**dados_metro, **dados_cptm}
+    dados = capturar_metro()
 
     if not dados:
         print("❌ Nenhum dado capturado")
@@ -203,9 +155,10 @@ def main():
     for linha, status in dados.items():
         antigo = estado_anterior.get(linha)
 
+        # 🔔 alerta somente se houve mudança
         if antigo is not None and antigo != status:
             enviar_telegram(
-                f"{emoji_linha(linha, status)} **{linha}**\n"
+                f"{emoji_status(status)} **{linha}**\n"
                 f"🔄 De: {antigo}\n"
                 f"➡️ Para: **{status}**"
             )
@@ -214,7 +167,7 @@ def main():
         estado_atual[linha] = status
 
     salvar_estado(estado_atual)
-    print("✅ JSON atualizado e persistido com sucesso")
+    print("✅ JSON atualizado com sucesso")
 
 
 if __name__ == "__main__":
