@@ -1,44 +1,120 @@
 from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
+import json
 import os
+import csv
+import requests
 from datetime import datetime, timedelta, timezone
 
 URL = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
 
-ARQUIVO_DEBUG_HTML = "debug_direto_metro.html"
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+ARQUIVO_ESTADO = "estado_metro.json"
+ARQUIVO_HISTORICO = "historico_metro.csv"
 
 
 def get_horario_sp():
-    fuso_sp = timezone(timedelta(hours=-3))
-    return datetime.now(fuso_sp)
+    return datetime.now(timezone(timedelta(hours=-3)))
 
 
-def main():
-    print("Iniciando captura HTML Direto do Metrô (DEBUG)")
+def enviar_telegram(msg):
+    if not TOKEN or not CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": msg,
+        "parse_mode": "Markdown"
+    }, timeout=10)
 
+
+def carregar_estado():
+    if os.path.exists(ARQUIVO_ESTADO):
+        with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def salvar_estado(estado):
+    with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
+        json.dump(estado, f, ensure_ascii=False, indent=2)
+
+
+def salvar_historico(linha, novo, antigo):
+    existe = os.path.exists(ARQUIVO_HISTORICO)
+    agora = get_horario_sp()
+
+    with open(ARQUIVO_HISTORICO, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if not existe:
+            writer.writerow(["Data", "Hora", "Linha", "Status Novo", "Status Antigo"])
+        writer.writerow([
+            agora.strftime("%Y-%m-%d"),
+            agora.strftime("%H:%M:%S"),
+            linha, novo, antigo
+        ])
+
+
+def capturar_status():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-
         page.goto(URL, timeout=60000)
 
-        # Tentar aceitar cookies (se existir)
+        # aceitar cookies
         try:
             page.click("button:has-text('Aceitar')", timeout=5000)
-            print("Cookies aceitos.")
-        except Exception:
-            print("Popup de cookies não encontrado ou já aceito.")
+        except:
+            pass
 
-        page.wait_for_timeout(5000)
-
+        page.wait_for_timeout(3000)
         html = page.content()
-
-        with open(ARQUIVO_DEBUG_HTML, "w", encoding="utf-8") as f:
-            f.write(html)
-
         browser.close()
 
-    print(f"HTML salvo com sucesso em {ARQUIVO_DEBUG_HTML}")
-    print("Execução concluída.")
+    soup = BeautifulSoup(html, "lxml")
+    resultado = {}
+
+    for item in soup.select("li.linha"):
+        nome = item.select_one(".linha-nome")
+        status = item.select_one(".linha-situacao")
+
+        if nome and status:
+            resultado[nome.get_text(strip=True)] = status.get_text(strip=True)
+
+    return resultado
+
+
+def main():
+    print("Iniciando monitoramento Direto do Metrô")
+
+    estado_anterior = carregar_estado()
+    estado_atual = {}
+
+    dados = capturar_status()
+
+    if not dados:
+        print("Nenhum dado capturado.")
+        return
+
+    for linha, status in dados.items():
+        antigo = estado_anterior.get(linha)
+
+        if antigo and antigo != status:
+            emoji = "✅" if "Normal" in status else "⚠️"
+            mensagem = (
+                f"{emoji} **Linha {linha}**\n"
+                f"🔄 De: {antigo}\n"
+                f"➡️ Para: **{status}**"
+            )
+            enviar_telegram(mensagem)
+            salvar_historico(linha, status, antigo)
+
+        estado_atual[linha] = status
+
+    salvar_estado(estado_atual)
+    print("Monitoramento concluído com sucesso.")
 
 
 if __name__ == "__main__":
