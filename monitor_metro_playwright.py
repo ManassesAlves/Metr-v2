@@ -21,22 +21,26 @@ def agora_sp():
 
 def enviar_telegram(msg):
     if not TOKEN or not CHAT_ID:
-        print("Telegram não configurado.")
         return
 
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={
-        "chat_id": CHAT_ID,
-        "text": msg,
-        "parse_mode": "Markdown"
-    }, timeout=10)
+    requests.post(
+        url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": msg,
+            "parse_mode": "Markdown",
+        },
+        timeout=10,
+    )
 
 
 def carregar_estado():
-    if os.path.exists(ARQUIVO_ESTADO):
-        with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
+    if not os.path.exists(ARQUIVO_ESTADO):
+        return {}
+
+    with open(ARQUIVO_ESTADO, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def salvar_estado(estado):
@@ -52,12 +56,13 @@ def salvar_historico(linha, novo, antigo):
         writer = csv.writer(f)
         if not existe:
             writer.writerow(["Data", "Hora", "Linha", "Status Novo", "Status Antigo"])
+
         writer.writerow([
             t.strftime("%Y-%m-%d"),
             t.strftime("%H:%M:%S"),
             linha,
             novo,
-            antigo or "INICIAL"
+            antigo,
         ])
 
 
@@ -90,10 +95,9 @@ def capturar_status():
 
 
 def main():
-    print("🚇 Monitoramento Direto do Metrô iniciado")
+    print("🚇 Monitoramento do Metrô iniciado")
 
     estado_anterior = carregar_estado()
-    primeira_execucao = estado_anterior is None
     estado_atual = {}
 
     dados = capturar_status()
@@ -102,30 +106,24 @@ def main():
         print("Nenhum dado capturado.")
         return
 
-    if primeira_execucao:
-        msg = "📡 **Monitoramento do Metrô iniciado**\n\n"
-        for linha, status in dados.items():
-            msg += f"🚇 Linha {linha}: **{status}**\n"
-        enviar_telegram(msg)
-
     for linha, status in dados.items():
-        antigo = estado_anterior.get(linha) if estado_anterior else None
+        antigo = estado_anterior.get(linha)
 
-        if antigo and antigo != status:
+        # 🚨 Só envia se houve mudança REAL
+        if antigo is not None and antigo != status:
             emoji = "✅" if "Normal" in status else "⚠️"
-            msg = (
+            mensagem = (
                 f"{emoji} **Linha {linha}**\n"
                 f"🔄 De: {antigo}\n"
                 f"➡️ Para: **{status}**"
             )
-            enviar_telegram(msg)
+            enviar_telegram(mensagem)
             salvar_historico(linha, status, antigo)
 
         estado_atual[linha] = status
 
     salvar_estado(estado_atual)
-
-    print("✅ Monitoramento concluído com sucesso")
+    print("✅ Execução finalizada com sucesso")
 
 
 if __name__ == "__main__":
