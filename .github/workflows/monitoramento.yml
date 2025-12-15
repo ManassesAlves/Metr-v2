@@ -1,29 +1,33 @@
-name: Monitoramento Metro SP
+name: Monitoramento Metro SP (DEBUG)
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: '*/5 * * * *'
-  workflow_dispatch:
 
 jobs:
   scraper:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repositório
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Instalar dependências
         run: |
           pip install playwright requests beautifulsoup4 lxml
           playwright install chromium
 
-      - name: Run scraper
+      - name: Executar scraper (DEBUG HTML)
         run: python monitor_metro_playwright.py
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Upload HTML debug
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-debug-direto-metro
+          path: debug_direto_metro.html
