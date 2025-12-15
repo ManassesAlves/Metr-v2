@@ -1,133 +1,101 @@
-🚇 Monitoramento de Transporte – SP (Metrô, CPTM e ViaMobilidade)
+# 🚇 Monitoramento de Transporte – SP (Metrô, CPTM e ViaMobilidade)
 
-Este projeto realiza o monitoramento automático da situação operacional das linhas de transporte sobre trilhos da Região Metropolitana de São Paulo, abrangendo:
+Este projeto realiza o **monitoramento automático da situação operacional** das linhas de transporte sobre trilhos da Região Metropolitana de São Paulo, abrangendo:
 
-🚇 Metrô de São Paulo
+- 🚇 **Metrô de São Paulo**
+- 🚈 **CPTM**
+- 🚆 **ViaMobilidade (Linhas 8 e 9)**
 
-🚈 CPTM
+O sistema verifica periodicamente o status das linhas, **detecta mudanças**, **registra histórico** e **envia notificações via Telegram somente quando ocorre alteração no status**, evitando alertas repetitivos ou falsos positivos.
 
-🚆 ViaMobilidade (Linhas 8 e 9)
+---
 
-O sistema verifica periodicamente o status das linhas, detecta mudanças, registra histórico e envia notificações via Telegram somente quando ocorre alteração no status, evitando alertas repetitivos ou falsos positivos.
-
-🎯 Objetivo
+## 🎯 Objetivo
 
 Fornecer um monitoramento confiável, automatizado e resiliente do transporte ferroviário de SP, com foco em:
 
-Detecção de problemas operacionais
+- Detecção de problemas operacionais  
+- Notificações em tempo quase real  
+- Persistência de histórico  
+- Baixa dependência de scraping frágil  
+- Execução contínua via **GitHub Actions**
 
-Notificações em tempo quase real
+---
 
-Persistência de histórico
+## ⚙️ Como funciona
 
-Baixa dependência de scraping frágil
+### 🔄 Execução automática
+O script é executado periodicamente através do **GitHub Actions**, em intervalos configuráveis via cron.
 
-Execução contínua via GitHub Actions
+### 🔍 Coleta de dados
+- **Metrô SP**  
+  Scraping direto de HTML, com timeout e fallback para evitar falhas do pipeline.
 
-⚙️ Como funciona
-🔄 Execução automática
+- **ViaMobilidade (Linhas 8 e 9)**  
+  Leitura de informações públicas do site oficial.
 
-O script é executado periodicamente através do GitHub Actions, em intervalos configuráveis via cron.
+- **CPTM**  
+  Monitoramento em **modo global**, assumindo *Operação Normal* como padrão e alterando o status **somente quando o site menciona explicitamente problemas**, evitando interpretações incorretas (como confundir nome/cor da linha com status).
 
-🔍 Coleta de dados
+### 📊 Padronização de status
+- ✅ **Operação normal**
+- ⚠️ **Qualquer outro status** (velocidade reduzida, operação parcial, falha, etc.)
 
-Metrô SP
-Scraping direto de HTML, com timeout e fallback para evitar falhas do pipeline.
+### 🔔 Notificações
+- As notificações são enviadas via **Telegram**
+- Um alerta **só é disparado quando há mudança real no status**
+- Sempre que possível, a **descrição do problema** é incluída na mensagem
 
-ViaMobilidade (Linhas 8 e 9)
-Leitura de informações públicas do site oficial.
+---
 
-CPTM
-Monitoramento em modo global, assumindo Operação Normal como padrão e alterando o status somente quando o site menciona explicitamente problemas, evitando interpretações incorretas (como confundir nome/cor da linha com status).
+## 📲 Exemplo de notificação
 
-📊 Padronização de status
-
-✅ Operação normal
-
-⚠️ Qualquer outro status (velocidade reduzida, operação parcial, falha, etc.)
-
-🔔 Notificações
-
-As notificações são enviadas via Telegram
-
-Um alerta só é disparado quando há mudança real no status
-
-Sempre que possível, a descrição do problema é incluída na mensagem
-
-📲 Exemplo de notificação
+```
 🚇⚠️ Linha 3 – Vermelha
 🔄 De: Operação normal
 ➡️ Para: Velocidade reduzida
 📝 Motivo: Falha em equipamento de sinalização
+```
 
-💾 Persistência de dados
+---
 
-O projeto mantém dois arquivos versionados no repositório:
+## 💾 Persistência de dados
 
-estado_transporte.json
-Guarda o último estado conhecido de cada linha.
+- `estado_transporte.json` – Último estado conhecido  
+- `historico_transporte.csv` – Histórico de mudanças
 
-historico_transporte.csv
-Registra o histórico de mudanças, com data, hora, linha, status antigo, status novo e descrição.
+Ambos são versionados no repositório para garantir continuidade entre execuções.
 
-Esses arquivos garantem:
+---
 
-Continuidade entre execuções
+## 🛡️ Resiliência e boas práticas
 
-Comparação correta de estados
+- Timeouts configurados
+- Tratamento de exceções por operador
+- Fallback seguro quando sites estão fora do ar
+- Baixa frequência de acesso (baixo risco de bloqueio)
 
-Auditoria e análise posterior
+---
 
-🛡️ Resiliência e boas práticas
+## 🔐 Variáveis de ambiente
 
-Timeouts configurados para evitar travamentos
+Configure como **Secrets** no GitHub:
 
-Tratamento de exceções por operador
+- `TELEGRAM_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-Fallback seguro quando um site está fora do ar
+---
 
-Uso de User-Agent adequado
+## 🚀 Tecnologias utilizadas
 
-Baixa frequência de acesso (baixo risco de bloqueio)
+- Python 3.11+
+- requests
+- BeautifulSoup (bs4)
+- GitHub Actions
+- Telegram Bot API
 
-Compatibilidade com versões antigas do JSON (migração automática)
+---
 
-🔐 Variáveis de ambiente
+## ✅ Status do projeto
 
-O envio de notificações requer as seguintes variáveis configuradas como Secrets no GitHub:
-
-TELEGRAM_TOKEN — Token do bot do Telegram
-
-TELEGRAM_CHAT_ID — ID do chat ou canal de destino
-
-🚀 Tecnologias utilizadas
-
-Python 3.11+
-
-requests
-
-BeautifulSoup (bs4)
-
-GitHub Actions
-
-Telegram Bot API
-
-📌 Observações importantes
-
-Este projeto utiliza apenas dados públicos, sem autenticação ou acesso restrito.
-
-O monitoramento da CPTM é propositalmente conservador, priorizando confiabilidade e ausência de falsos positivos.
-
-Caso a CPTM disponibilize uma API pública no futuro, o código está preparado para migração.
-
-📈 Possíveis evoluções futuras
-
-Classificação automática de severidade
-
-Alertas apenas ao sair de “Operação normal”
-
-Resumo diário via Telegram
-
-Dashboard de visualização
-
-Integração com API oficial da CPTM (quando disponível)
+🟢 **Estável – Pronto para uso em produção**
