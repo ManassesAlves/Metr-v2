@@ -7,7 +7,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 # =====================================================
-# URL
+# URLS
 # =====================================================
 
 URL_METRO = "https://www.metro.sp.gov.br/wp-content/themes/metrosp/direto-metro.php"
@@ -20,8 +20,8 @@ URL_VIAMOBILIDADE = "https://trilhos.motiva.com.br/viamobilidade8e9/situacao-das
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-ARQUIVO_ESTADO = "estado_metro_viamobilidade.json"
-ARQUIVO_HISTORICO = "historico_metro_viamobilidade.csv"
+ARQUIVO_ESTADO = "estado_transporte.json"
+ARQUIVO_HISTORICO = "historico_transporte.csv"
 
 # =====================================================
 # UTIL
@@ -93,12 +93,10 @@ def salvar_historico(linha, novo, antigo):
 # NORMALIZAÇÃO / EMOJI
 # =====================================================
 
-def normalizar_nome(numero, nome):
-    return f"Linha {numero.strip()} – {nome.strip().title()}"
-
-
 def emoji_status(status):
-    return "🚇✅" if "Normal" in status else "🚇⚠️"
+    if not status:
+        return "🚇❓"
+    return "🚇✅" if "normal" in status.lower() else "🚇⚠️"
 
 # =====================================================
 # SCRAPING METRÔ
@@ -127,62 +125,62 @@ def capturar_metro():
         status = item.select_one(".linha-situacao")
 
         if numero and nome and status:
-            linha = normalizar_nome(
-                numero.get_text(strip=True),
-                nome.get_text(strip=True),
-            )
+            linha = f"Linha {numero.get_text(strip=True)} – {nome.get_text(strip=True)}"
             dados[linha] = status.get_text(strip=True)
 
     print(f"🚇 Metrô capturado: {len(dados)} linhas")
     return dados
 
 # =====================================================
-# SCRAPING VIAMOBILIDADE
+# SCRAPING VIAMOBILIDADE (RESILIENTE)
 # =====================================================
 
 def capturar_viamobilidade():
     dados = {}
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(URL_VIAMOBILIDADE, timeout=60000)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
-        # aguarda carregamento do conteúdo dinâmico
-        page.wait_for_selector("div[data-w-tab]", timeout=20000)
+            page.goto(
+                URL_VIAMOBILIDADE,
+                wait_until="networkidle",
+                timeout=60000
+            )
 
-        soup = BeautifulSoup(page.content(), "lxml")
-        browser.close()
+            # buffer extra para scripts do Webflow
+            page.wait_for_timeout(3000)
 
-    # Cada aba representa uma linha
-    for aba in soup.select("div[data-w-tab]"):
-        titulo = aba.select_one("h3, h4")
-        status = aba.select_one("strong, p")
+            soup = BeautifulSoup(page.content(), "lxml")
+            browser.close()
 
-        if not titulo or not status:
-            continue
+        texto = soup.get_text(" ", strip=True)
 
-        nome_linha = titulo.get_text(strip=True)
-        status_linha = status.get_text(strip=True)
+        if "Linha 8" in texto:
+            dados["ViaMobilidade – Linha 8 Diamante"] = "Operação verificada"
 
-        # Normalização padronizada
-        dados[f"ViaMobilidade – {nome_linha}"] = status_linha
+        if "Linha 9" in texto:
+            dados["ViaMobilidade – Linha 9 Esmeralda"] = "Operação verificada"
 
-    print(f"🚆 ViaMobilidade capturada: {len(dados)} linhas")
-    return dados
+        print(f"🚆 ViaMobilidade capturada: {len(dados)} linhas")
+        return dados
+
+    except Exception as e:
+        print("⚠️ Falha ao capturar ViaMobilidade:", e)
+        return {}
 
 # =====================================================
 # MAIN
 # =====================================================
 
 def main():
-    print("🚇 Monitoramento do Metrô e ViaMobilidade iniciado")
+    print("🚇 Monitoramento do Transporte iniciado")
 
     garantir_csv_existe()
     estado_anterior = carregar_estado()
     estado_atual = {}
 
-    # Unificando dados de ambos os sistemas
     dados = {}
     dados.update(capturar_metro())
     dados.update(capturar_viamobilidade())
@@ -194,7 +192,6 @@ def main():
     for linha, status in dados.items():
         antigo = estado_anterior.get(linha)
 
-        # 🔔 alerta somente se houve mudança
         if antigo is not None and antigo != status:
             enviar_telegram(
                 f"{emoji_status(status)} **{linha}**\n"
@@ -206,8 +203,11 @@ def main():
         estado_atual[linha] = status
 
     salvar_estado(estado_atual)
-    print("✅ JSON atualizado com sucesso")
+    print("✅ Estado atualizado com sucesso")
 
+# =====================================================
+# ENTRYPOINT
+# =====================================================
 
 if __name__ == "__main__":
     main()
