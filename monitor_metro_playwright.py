@@ -84,19 +84,33 @@ def salvar_historico(linha, novo, antigo):
 
 
 # ===============================
-# NORMALIZAÇÃO DE NOME
+# NORMALIZAÇÃO / IDENTIFICAÇÃO
 # ===============================
 
 def normalizar_nome(numero, nome):
+    return f"Linha {numero.strip()} – {nome.strip().title()}"
+
+
+def tipo_linha(nome_normalizado):
     """
-    Exemplos de saída:
-    - Linha 1 – Azul
-    - Linha 7 – Rubi
-    - Linha 10 – Turquesa
+    CPTM: linhas >= 7
+    Metrô: linhas <= 6
     """
-    numero = numero.strip()
-    nome = nome.strip().title()
-    return f"Linha {numero} – {nome}"
+    try:
+        numero = int(nome_normalizado.split()[1])
+        return "CPTM" if numero >= 7 else "METRO"
+    except Exception:
+        return "METRO"
+
+
+def emoji_linha(linha, status):
+    tipo = tipo_linha(linha)
+    ok = "Normal" in status
+
+    if tipo == "CPTM":
+        return "🚆✅" if ok else "🚆⚠️"
+    else:
+        return "🚇✅" if ok else "🚇⚠️"
 
 
 # ===============================
@@ -109,7 +123,6 @@ def capturar_status():
         page = browser.new_page()
         page.goto(URL, timeout=60000)
 
-        # aceitar cookies
         try:
             page.click("button:has-text('Aceitar')", timeout=5000)
         except:
@@ -122,15 +135,6 @@ def capturar_status():
     soup = BeautifulSoup(html, "lxml")
     dados = {}
 
-    """
-    Estrutura confirmada:
-    <li class="linha">
-        <div class="linha-numero">1</div>
-        <div class="linha-nome">Azul</div>
-        <div class="linha-situacao">Operação Normal</div>
-    </li>
-    """
-
     for item in soup.select("li.linha"):
         numero = item.select_one(".linha-numero")
         nome = item.select_one(".linha-nome")
@@ -139,12 +143,12 @@ def capturar_status():
         if not numero or not nome or not status:
             continue
 
-        nome_normalizado = normalizar_nome(
+        linha = normalizar_nome(
             numero.get_text(strip=True),
-            nome.get_text(strip=True)
+            nome.get_text(strip=True),
         )
 
-        dados[nome_normalizado] = status.get_text(strip=True)
+        dados[linha] = status.get_text(strip=True)
 
     return dados
 
@@ -154,7 +158,7 @@ def capturar_status():
 # ===============================
 
 def main():
-    print("🚇 Monitoramento Metrô + CPTM iniciado")
+    print("🚇🚆 Monitoramento Metrô + CPTM iniciado")
 
     garantir_csv_existe()
 
@@ -170,9 +174,9 @@ def main():
     for linha, status in dados.items():
         antigo = estado_anterior.get(linha)
 
-        # 🔔 alerta somente se houver mudança real
+        # 🔔 alerta somente se houver mudança
         if antigo is not None and antigo != status:
-            emoji = "✅" if "Normal" in status else "⚠️"
+            emoji = emoji_linha(linha, status)
             mensagem = (
                 f"{emoji} **{linha}**\n"
                 f"🔄 De: {antigo}\n"
