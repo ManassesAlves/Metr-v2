@@ -29,6 +29,34 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # =====================================================
+# PADRÕES DE STATUS (CENTRALIZADO)
+# =====================================================
+
+PADROES_ENCERRADA = [
+    "operação encerrada",
+    "circulação encerrada",
+    "serviço encerrado",
+]
+
+PADROES_PROBLEMA = [
+    "velocidade reduzida",
+    "operação parcial",
+    "operação interrompida",
+    "operação prejudicada",
+    "circulação com restrições",
+    "circulação alterada",
+    "intervalos maiores",
+    "falha",
+    "problema",
+]
+
+PADROES_NORMAL = [
+    "operação normal",
+    "circulação normal",
+    "operação normalizada",
+]
+
+# =====================================================
 # UTIL
 # =====================================================
 
@@ -61,18 +89,46 @@ def identificar_operador(linha):
 
 
 def emoji_status(status, operador):
-    status = status.lower()
+    s = status.lower()
 
     if operador == "metro":
-        return "🚇✅" if "normal" in status else "🚇⚠️"
+        if "encerrada" in s:
+            return "🚇⛔"
+        return "🚇✅" if "normal" in s else "🚇⚠️"
 
     if operador == "viamobilidade":
-        return "🚆✅" if "normal" in status else "🚆⚠️"
+        if "encerrada" in s:
+            return "🚆⛔"
+        return "🚆✅" if "normal" in s else "🚆⚠️"
 
     if operador == "cptm":
-        return "🚈✅" if "normal" in status else "🚈⚠️"
+        if "encerrada" in s:
+            return "🚈⛔"
+        return "🚈✅" if "normal" in s else "🚈⚠️"
 
     return "❓"
+
+
+def classificar_status(texto):
+    """
+    Retorna (status, descricao) com prioridade:
+    Encerrada > Problema > Normal
+    """
+    t = texto.lower()
+
+    for p in PADROES_ENCERRADA:
+        if p in t:
+            return "Operação Encerrada", "Operação Encerrada"
+
+    for p in PADROES_PROBLEMA:
+        if p in t:
+            return p.title(), p.title()
+
+    for p in PADROES_NORMAL:
+        if p in t:
+            return "Operação normal", None
+
+    return "Operação normal", None
 
 
 def obter_status_antigo(valor):
@@ -127,7 +183,7 @@ def salvar_historico(linha, novo, antigo, descricao):
         ])
 
 # =====================================================
-# SCRAPING METRÔ (SEM INVENTAR DESCRIÇÃO)
+# SCRAPING METRÔ
 # =====================================================
 
 def capturar_metro():
@@ -157,39 +213,37 @@ def capturar_metro():
 
             dados[linha] = {
                 "status": status_txt,
-                "descricao": None,  # NÃO repetir status como motivo
+                "descricao": None,
             }
 
     return dados
 
 # =====================================================
-# SCRAPING VIAMOBILIDADE
+# SCRAPING VIAMOBILIDADE (ROBUSTO)
 # =====================================================
 
 def capturar_viamobilidade():
+    linhas = {
+        "ViaMobilidade – Linha 8 Diamante": "linha 8",
+        "ViaMobilidade – Linha 9 Esmeralda": "linha 9",
+    }
+
     dados = {
-        "ViaMobilidade – Linha 8 Diamante": {
-            "status": "Status indefinido",
-            "descricao": None,
-        },
-        "ViaMobilidade – Linha 9 Esmeralda": {
-            "status": "Status indefinido",
-            "descricao": None,
-        },
+        linha: {"status": "Operação normal", "descricao": None}
+        for linha in linhas
     }
 
     try:
         r = requests.get(URL_VIAMOBILIDADE, timeout=30)
         texto = r.text.lower()
-
-        if "operação normal" in texto:
-            for linha in dados:
-                dados[linha] = {
-                    "status": "Operação normal",
-                    "descricao": None,
-                }
     except Exception as e:
         print(f"⚠️ Falha ao acessar ViaMobilidade: {e}")
+        return dados
+
+    for linha, chave in linhas.items():
+        trecho = texto.split(chave, 1)[1][:500] if chave in texto else texto
+        status, desc = classificar_status(trecho)
+        dados[linha] = {"status": status, "descricao": desc}
 
     return dados
 
@@ -225,25 +279,10 @@ def capturar_cptm():
         return dados
 
     texto = r.text.lower()
+    status, desc = classificar_status(texto)
 
-    palavras_problema = [
-        "velocidade reduzida",
-        "operação parcial",
-        "operação interrompida",
-        "operação prejudicada",
-        "operação encerrada",
-        "falha",
-        "problema",
-    ]
-
-    for palavra in palavras_problema:
-        if palavra in texto:
-            for linha in dados:
-                dados[linha] = {
-                    "status": palavra.title(),
-                    "descricao": palavra.title(),
-                }
-            break
+    for linha in dados:
+        dados[linha] = {"status": status, "descricao": desc}
 
     return dados
 
