@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import json
 import os
 import csv
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 # =====================================================
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ARQUIVO_ESTADO = os.path.join(BASE_DIR, "estado_transporte.json")
 ARQUIVO_HISTORICO = os.path.join(BASE_DIR, "historico_transporte.csv")
+ARQUIVO_HASH = os.path.join(BASE_DIR, "hash_sites.json")
 
 # =====================================================
 # URLS
@@ -26,10 +28,11 @@ URL_CPTM = "https://www.cptm.sp.gov.br/cptm"
 # =====================================================
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")               # grupo
+ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID")   # privado
 
 # =====================================================
-# PADRÕES DE STATUS (CENTRALIZADO)
+# PADRÕES DE STATUS
 # =====================================================
 
 PADROES_ENCERRADA = [
@@ -69,11 +72,17 @@ def enviar_telegram(msg):
         return
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": msg,
-            "parse_mode": "Markdown",
-        },
+        data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"},
+        timeout=10,
+    )
+
+
+def enviar_telegram_admin(msg):
+    if not TOKEN or not ADMIN_CHAT_ID:
+        return
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": ADMIN_CHAT_ID, "text": msg, "parse_mode": "Markdown"},
         timeout=10,
     )
 
@@ -90,30 +99,16 @@ def identificar_operador(linha):
 
 def emoji_status(status, operador):
     s = status.lower()
-
-    if operador == "metro":
-        if "encerrada" in s:
-            return "🚇⛔"
-        return "🚇✅" if "normal" in s else "🚇⚠️"
-
-    if operador == "viamobilidade":
-        if "encerrada" in s:
-            return "🚆⛔"
-        return "🚆✅" if "normal" in s else "🚆⚠️"
-
-    if operador == "cptm":
-        if "encerrada" in s:
-            return "🚈⛔"
-        return "🚈✅" if "normal" in s else "🚈⚠️"
-
-    return "❓"
+    if "encerrada" in s:
+        return {"metro": "🚇⛔", "viamobilidade": "🚆⛔", "cptm": "🚈⛔"}.get(operador, "⛔")
+    return {
+        "metro": "🚇✅" if "normal" in s else "🚇⚠️",
+        "viamobilidade": "🚆✅" if "normal" in s else "🚆⚠️",
+        "cptm": "🚈✅" if "normal" in s else "🚈⚠️",
+    }.get(operador, "❓")
 
 
 def classificar_status(texto):
-    """
-    Retorna (status, descricao) com prioridade:
-    Encerrada > Problema > Normal
-    """
     t = texto.lower()
 
     for p in PADROES_ENCERRADA:
@@ -138,6 +133,40 @@ def obter_status_antigo(valor):
         return valor
     return None
 
+
+def hash_texto(texto):
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+# =====================================================
+# ESTRUTURA / HASH
+# =====================================================
+
+def carregar_hashes():
+    if not os.path.exists(ARQUIVO_HASH):
+        return {}
+    with open(ARQUIVO_HASH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def salvar_hashes(hashes):
+    with open(ARQUIVO_HASH, "w", encoding="utf-8") as f:
+        json.dump(hashes, f, ensure_ascii=False, indent=2)
+
+
+def verificar_mudanca_estrutura(nome_site, html):
+    hashes = carregar_hashes()
+    novo_hash = hash_texto(html)
+
+    if nome_site in hashes and hashes[nome_site] != novo_hash:
+        enviar_telegram_admin(
+            f"🛠️ *Alerta técnico*\n"
+            f"O site **{nome_site}** mudou a estrutura.\n"
+            f"O scraping pode precisar de ajuste."
+        )
+
+    hashes[nome_site] = novo_hash
+    salvar_hashes(hashes)
+
 # =====================================================
 # PERSISTÊNCIA
 # =====================================================
@@ -145,15 +174,9 @@ def obter_status_antigo(valor):
 def garantir_csv_existe():
     if not os.path.exists(ARQUIVO_HISTORICO):
         with open(ARQUIVO_HISTORICO, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "Data",
-                "Hora",
-                "Linha",
-                "Status Novo",
-                "Status Antigo",
-                "Descricao",
-            ])
+            csv.writer(f).writerow(
+                ["Data", "Hora", "Linha", "Status Novo", "Status Antigo", "Descricao"]
+            )
 
 
 def carregar_estado():
@@ -172,87 +195,63 @@ def salvar_historico(linha, novo, antigo, descricao):
     garantir_csv_existe()
     t = agora_sp()
     with open(ARQUIVO_HISTORICO, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            t.strftime("%Y-%m-%d"),
-            t.strftime("%H:%M:%S"),
-            linha,
-            novo,
-            antigo,
-            descricao or "",
-        ])
+        csv.writer(f).writerow(
+            [t.strftime("%Y-%m-%d"), t.strftime("%H:%M:%S"), linha, novo, antigo, descricao or ""]
+        )
 
 # =====================================================
-# SCRAPING METRÔ
+# SCRAPING
 # =====================================================
 
 def capturar_metro():
     dados = {}
-
     try:
-        r = requests.get(
-            URL_METRO,
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (MonitorTransporte)"}
-        )
+        r = requests.get(URL_METRO, timeout=15)
         r.raise_for_status()
+        verificar_mudanca_estrutura("MetroSP", r.text)
     except Exception as e:
-        print(f"⚠️ Falha ao acessar Metrô: {e}")
+        print(f"⚠️ Metrô fora: {e}")
         return dados
 
     soup = BeautifulSoup(r.text, "lxml")
-
     for item in soup.select("li.linha"):
-        numero = item.select_one(".linha-numero")
+        n = item.select_one(".linha-numero")
         nome = item.select_one(".linha-nome")
-        status = item.select_one(".linha-situacao")
-
-        if numero and nome and status:
-            linha = f"Linha {numero.text.strip()} – {nome.text.strip()}"
-            status_txt = status.text.strip()
-
-            dados[linha] = {
-                "status": status_txt,
+        s = item.select_one(".linha-situacao")
+        if n and nome and s:
+            dados[f"Linha {n.text.strip()} – {nome.text.strip()}"] = {
+                "status": s.text.strip(),
                 "descricao": None,
             }
-
     return dados
 
-# =====================================================
-# SCRAPING VIAMOBILIDADE (ROBUSTO)
-# =====================================================
 
 def capturar_viamobilidade():
     linhas = {
         "ViaMobilidade – Linha 8 Diamante": "linha 8",
         "ViaMobilidade – Linha 9 Esmeralda": "linha 9",
     }
-
-    dados = {
-        linha: {"status": "Operação normal", "descricao": None}
-        for linha in linhas
-    }
+    dados = {l: {"status": "Operação normal", "descricao": None} for l in linhas}
 
     try:
         r = requests.get(URL_VIAMOBILIDADE, timeout=30)
-        texto = r.text.lower()
+        r.raise_for_status()
+        verificar_mudanca_estrutura("ViaMobilidade", r.text)
     except Exception as e:
-        print(f"⚠️ Falha ao acessar ViaMobilidade: {e}")
+        print(f"⚠️ ViaMobilidade fora: {e}")
         return dados
 
+    texto = r.text.lower()
     for linha, chave in linhas.items():
-        trecho = texto.split(chave, 1)[1][:500] if chave in texto else texto
+        trecho = texto.split(chave, 1)[1][:600] if chave in texto else texto
         status, desc = classificar_status(trecho)
         dados[linha] = {"status": status, "descricao": desc}
 
     return dados
 
-# =====================================================
-# SCRAPING CPTM (GLOBAL)
-# =====================================================
 
 def capturar_cptm():
-    linhas_cptm = {
+    linhas = {
         "CPTM – Linha 7 – Rubi",
         "CPTM – Linha 8 – Diamante",
         "CPTM – Linha 9 – Esmeralda",
@@ -261,28 +260,19 @@ def capturar_cptm():
         "CPTM – Linha 12 – Safira",
         "CPTM – Linha 13 – Jade",
     }
-
-    dados = {
-        linha: {"status": "Operação normal", "descricao": None}
-        for linha in linhas_cptm
-    }
+    dados = {l: {"status": "Operação normal", "descricao": None} for l in linhas}
 
     try:
-        r = requests.get(
-            URL_CPTM,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0 (MonitorTransporte)"}
-        )
+        r = requests.get(URL_CPTM, timeout=20)
         r.raise_for_status()
+        verificar_mudanca_estrutura("CPTM", r.text)
     except Exception as e:
-        print(f"⚠️ Falha ao acessar CPTM: {e}")
+        print(f"⚠️ CPTM fora: {e}")
         return dados
 
-    texto = r.text.lower()
-    status, desc = classificar_status(texto)
-
-    for linha in dados:
-        dados[linha] = {"status": status, "descricao": desc}
+    status, desc = classificar_status(r.text)
+    for l in dados:
+        dados[l] = {"status": status, "descricao": desc}
 
     return dados
 
@@ -300,26 +290,18 @@ def main():
     estado_atual.update(capturar_cptm())
 
     for linha, info in estado_atual.items():
-        novo_status = info["status"]
-        descricao = info.get("descricao")
+        novo = info["status"]
+        desc = info.get("descricao")
+        antigo = obter_status_antigo(estado_anterior.get(linha))
 
-        antigo_status = obter_status_antigo(estado_anterior.get(linha))
-
-        if antigo_status is not None and antigo_status != novo_status:
-            operador = identificar_operador(linha)
-            emoji = emoji_status(novo_status, operador)
-
-            mensagem = (
-                f"{emoji} **{linha}**\n"
-                f"🔄 De: {antigo_status}\n"
-                f"➡️ Para: **{novo_status}**"
-            )
-
-            if descricao:
-                mensagem += f"\n📝 Motivo: {descricao}"
-
-            enviar_telegram(mensagem)
-            salvar_historico(linha, novo_status, antigo_status, descricao)
+        if antigo is not None and antigo != novo:
+            op = identificar_operador(linha)
+            emoji = emoji_status(novo, op)
+            msg = f"{emoji} **{linha}**\n🔄 De: {antigo}\n➡️ Para: **{novo}**"
+            if desc:
+                msg += f"\n📝 Motivo: {desc}"
+            enviar_telegram(msg)
+            salvar_historico(linha, novo, antigo, desc)
 
     salvar_estado(estado_atual)
 
