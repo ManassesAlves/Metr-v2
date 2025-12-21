@@ -1,33 +1,13 @@
 {
-  "Linha 1 – Azul": {
-    "status": "Operação Normal",
-    "descricao": null
-  },
-  "Linha 2 – Verde": {
-    "status": "Operação Normal",
-    "descricao": null
-  },
-  "Linha 3 – Vermelha": {
-    "status": "Operação Normal",
-    "descricao": null
-  },
-  "Linha 4 – Amarela": {
-    "status": "Operação Normal",
-    "descricao": null
-  },
-  "Linha 5 – Lilás": {
-    "status": "Operação Normal",
-    "descricao": null
-  },
-  "Linha 15 – Prata": {
-    "status": "Operação Normal",
-    "descricao": null
-  },
   "ViaMobilidade – Linha 8 Diamante": {
     "status": "Operação normal",
     "descricao": null
   },
   "ViaMobilidade – Linha 9 Esmeralda": {
+    "status": "Operação normal",
+    "descricao": null
+  },
+  "CPTM – Linha 11 – Coral": {
     "status": "Operação normal",
     "descricao": null
   },
@@ -39,10 +19,6 @@
     "status": "Operação normal",
     "descricao": null
   },
-  "CPTM – Linha 11 – Coral": {
-    "status": "Operação normal",
-    "descricao": null
-  },
   "CPTM – Linha 12 – Safira": {
     "status": "Operação normal",
     "descricao": null
@@ -51,11 +27,11 @@
     "status": "Operação normal",
     "descricao": null
   },
-  "CPTM – Linha 13 – Jade": {
+  "CPTM – Linha 8 – Diamante": {
     "status": "Operação normal",
     "descricao": null
   },
-  "CPTM – Linha 8 – Diamante": {
+  "CPTM – Linha 13 – Jade": {
     "status": "Operação normal",
     "descricao": null
   }
